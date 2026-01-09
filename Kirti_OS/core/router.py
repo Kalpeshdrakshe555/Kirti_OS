@@ -3,6 +3,7 @@
 Kirti OS - Task Router (Architect Edition + Web Automation + Smart Model Ladder)
 Purpose: Intelligent Routing + Multi-File Project Scaffolding + Web Search.
 State: Preserves ALL previous features (Circuit Breaker, Key Rotation, System Collector).
+Updates: Integrated 'AgentManager' for Full Stack Projects.
 """
 
 import asyncio
@@ -19,6 +20,9 @@ from dotenv import load_dotenv
 from groq import AsyncGroq
 from google import genai
 from google.genai import types
+
+# 🔥 NEW: Import the Multi-Agent Manager
+from Kirti_OS.core.agent_manager import AgentManager
 
 # Load Env Vars
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -44,7 +48,7 @@ VISION_MODELS = [
 ]
 
 # ============================================================================
-# DATA STRUCTURES (UNTOUCHED)
+# DATA STRUCTURES (UNTOUCHED + NEW TYPE)
 # ============================================================================
 
 class TaskType(Enum):
@@ -52,6 +56,7 @@ class TaskType(Enum):
     VISION = "vision"
     ACTION = "action"
     SYSTEM_STATUS = "system_status"
+    PROJECT_BUILD = "project_build"  # 🔥 NEW: For Full Stack Projects
     GENERIC = "generic"
 
 @dataclass
@@ -172,7 +177,9 @@ class IntentParser:
 class TaskClassifier:
     VISION_KEYWORDS = {'see', 'look', 'screenshot', 'what is this', 'image', 'photo', 'scan', 'analyze', 'dekho', 'screen'}
     
-    # 🔥 UPDATED: Added Browser Keywords so it triggers Action Mode
+    # 🔥 UPDATED: Project Keywords
+    PROJECT_KEYWORDS = {'create a project', 'full stack', 'build a website', 'make an app', 'create a dashboard', 'create a game', 'develop a', 'new project', 'snake game'}
+
     ACTION_KEYWORDS = {
         'open', 'close', 'shutdown', 'mute', 'volume', 'lock', 'minimize', 'type', 'run', 
         'create', 'save', 'get file', 'download', 'make', 'build', 
@@ -183,7 +190,15 @@ class TaskClassifier:
 
     async def classify(self, prompt: str, has_image: bool) -> TaskType:
         prompt = prompt.lower()
+        
+        # 🚀 FIX: Check for Project Build FIRST (Highest Priority)
+        # Even if there is an image, if user says "Create Project", go to Agent Manager.
+        if any(k in prompt for k in self.PROJECT_KEYWORDS): 
+            return TaskType.PROJECT_BUILD
+            
+        # Then check for Image
         if has_image: return TaskType.VISION
+        
         if any(k in prompt for k in self.STATUS_KEYWORDS): return TaskType.SYSTEM_STATUS
         if any(k in prompt for k in self.ACTION_KEYWORDS): return TaskType.ACTION
         if any(k in prompt for k in self.VISION_KEYWORDS): return TaskType.VISION
@@ -206,7 +221,7 @@ class SystemCollector:
 # ============================================================================
 
 class GroqBrain:
-    # 🔥 UPDATED PROMPT: MANDATORY VISUALS & ENHANCEMENT
+    # 🔥 UPDATED SYSTEM PROMPT: MANDATORY VISUALS & ENHANCEMENT
     SYSTEM_PROMPT = """You are Kirti OS, an Expert AI Developer.
 
 PROTOCOL:
@@ -240,8 +255,6 @@ CONTENT:
 ...
 </TOOL>"
 """
-    # ... (rest of the class remains same)
-    # ... (बाकी कोड सेम रहेगा)
     def __init__(self):
         self.api_key = os.getenv("GROQ_API_KEY")
         self.client = AsyncGroq(api_key=self.api_key) if self.api_key else None
@@ -313,7 +326,7 @@ class GeminiBrain:
         return "❌ Vision Failed: All Models & Keys Exhausted."
 
 # ============================================================================
-# MAIN ROUTER (UNTOUCHED)
+# MAIN ROUTER (UPDATED)
 # ============================================================================
 
 class TaskRouter:
@@ -325,9 +338,12 @@ class TaskRouter:
         self.parser = IntentParser()
         self.sys = SystemCollector()
         
+        # 🔥 Initialize the new Agent Manager
+        self.agent_manager = AgentManager()
+        
         # Stats
         self.stats = {'requests': 0, 'actions': 0}
-        logger.info("TaskRouter (God Mode) Initialized")
+        logger.info("TaskRouter (God Mode + Multi-Agent) Initialized")
 
     async def route(self, prompt: str, image_bytes: bytes = None) -> RouterResponse:
         start = asyncio.get_event_loop().time()
@@ -341,10 +357,18 @@ class TaskRouter:
         tool_calls = []
         
         try:
-            if task == TaskType.SYSTEM_STATUS:
+            # 🚀 TASK 1: PROJECT BUILD (Agent Manager)
+            if task == TaskType.PROJECT_BUILD:
+                # Agent Manager handles everything internally and returns a final report
+                result = await self.agent_manager.execute_project(prompt)
+                model = "Multi-Agent-Swarm"
+            
+            # 🚀 TASK 2: SYSTEM STATUS
+            elif task == TaskType.SYSTEM_STATUS:
                 result = await self.sys.get_status()
                 model = "local_system"
             
+            # 🚀 TASK 3: VISION
             elif task == TaskType.VISION:
                 if not has_image:
                     result = await self.groq.generate(prompt)
@@ -362,6 +386,7 @@ class TaskRouter:
                     else:
                         result = "⚠️ Vision Circuit Open"
             
+            # 🚀 TASK 4: GENERIC CODING / ACTIONS (Old Groq Logic)
             else:
                 if self.circuit_breaker.is_available("groq"):
                     try:
