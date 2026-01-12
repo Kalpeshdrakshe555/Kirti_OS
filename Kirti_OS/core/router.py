@@ -1,9 +1,10 @@
-# core/router.py
+# Kirti_OS/core/router.py
 """
-Kirti OS - Task Router (Architect Edition + Web Automation + Smart Model Ladder)
-Purpose: Intelligent Routing + Multi-File Project Scaffolding + Web Search.
+Kirti OS - Task Router (Self-Healing Edition)
+Purpose: Routes complex projects to the Self-Healing Orchestrator (Pro Models)
+and handles simple tasks via Local/Groq Brain.
 State: Preserves ALL previous features (Circuit Breaker, Key Rotation, System Collector).
-Updates: Integrated 'AgentManager' for Full Stack Projects.
+UPDATED: Added Multi-Model Selection for Project Building.
 """
 
 import asyncio
@@ -21,8 +22,13 @@ from groq import AsyncGroq
 from google import genai
 from google.genai import types
 
-# 🔥 NEW: Import the Multi-Agent Manager
-from Kirti_OS.core.agent_manager import AgentManager
+# 🔥 NEW: Import the Self-Healing Orchestrator
+# Make sure self_healing_orchestrator.py is in the same directory (core)
+try:
+    from Kirti_OS.core.self_healing_orchestrator import SelfHealingOrchestrator
+except ImportError:
+    # Fallback for local testing if running from root
+    from self_healing_orchestrator import SelfHealingOrchestrator
 
 # Load Env Vars
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -39,12 +45,11 @@ logger = logging.getLogger(__name__)
 LOGIC_MODEL_ID = "llama-3.3-70b-versatile"
 
 VISION_MODELS = [
-    "gemini-3-flash",                    # 💎 BEST & FRESH
-    "gemini-2.5-flash-lite",             # 🥈 BACKUP
-    "gemini-2.0-flash-lite-preview-02-05", # 🥉 STABLE
-    "gemini-2.0-flash-exp",              # OLD RELIABLE
-    "gemini-2.5-flash",                  # ⚠️ ALMOST FULL
-    "gemini-1.5-flash"                   # FALLBACK
+    "gemini-2.0-flash",                     # 💎 BEST & FRESH
+    "gemini-2.0-flash-lite-preview-02-05", # 🥈 BACKUP
+    "gemini-1.5-flash",                     # 🥉 STABLE
+    "gemini-1.5-pro",                       # OLD RELIABLE
+    "gemini-1.5-flash-8b"                   # FALLBACK
 ]
 
 # ============================================================================
@@ -56,7 +61,7 @@ class TaskType(Enum):
     VISION = "vision"
     ACTION = "action"
     SYSTEM_STATUS = "system_status"
-    PROJECT_BUILD = "project_build"  # 🔥 NEW: For Full Stack Projects
+    PROJECT_BUILD = "project_build"  # 🔥 NEW: For Self-Healing Projects
     GENERIC = "generic"
 
 @dataclass
@@ -83,7 +88,7 @@ class CircuitBreakerState:
     open_until: Optional[datetime] = None
 
 # ============================================================================
-# CIRCUIT BREAKER (UNTOUCHED)
+# CIRCUIT BREAKER (UNTOUCHED - FULL LOGIC)
 # ============================================================================
 
 class CircuitBreaker:
@@ -177,12 +182,16 @@ class IntentParser:
 class TaskClassifier:
     VISION_KEYWORDS = {'see', 'look', 'screenshot', 'what is this', 'image', 'photo', 'scan', 'analyze', 'dekho', 'screen'}
     
-    # 🔥 UPDATED: Project Keywords
-    PROJECT_KEYWORDS = {'create a project', 'full stack', 'build a website', 'make an app', 'create a dashboard', 'create a game', 'develop a', 'new project', 'snake game'}
+    # 🔥 UPDATED: Project Keywords for Self-Healing Orchestrator
+    PROJECT_KEYWORDS = {
+        'create a', 'full stack', 'build a', 'make an app', 'create a game', 
+        'develop a', 'new project', 'snake game', 'write a program', 'code for',
+        'software', 'application', 'website'
+    }
 
     ACTION_KEYWORDS = {
         'open', 'close', 'shutdown', 'mute', 'volume', 'lock', 'minimize', 'type', 'run', 
-        'create', 'save', 'get file', 'download', 'make', 'build', 
+        'create file', 'save', 'get file', 'download', 'make file', 
         'search', 'find', 'modern', 'latest', 'tailwind', 'documentation', 'example', 'fetch'
     }
     
@@ -191,12 +200,11 @@ class TaskClassifier:
     async def classify(self, prompt: str, has_image: bool) -> TaskType:
         prompt = prompt.lower()
         
-        # 🚀 FIX: Check for Project Build FIRST (Highest Priority)
-        # Even if there is an image, if user says "Create Project", go to Agent Manager.
+        # 🚀 PRIORITY FIX: Check for Project Build FIRST (Even if image is present)
+        # This allows "Create a game based on this screenshot"
         if any(k in prompt for k in self.PROJECT_KEYWORDS): 
             return TaskType.PROJECT_BUILD
             
-        # Then check for Image
         if has_image: return TaskType.VISION
         
         if any(k in prompt for k in self.STATUS_KEYWORDS): return TaskType.SYSTEM_STATUS
@@ -217,44 +225,15 @@ class SystemCollector:
             return "🖥️ System Status Unavailable"
 
 # ============================================================================
-# AI BRAINS (UPDATED: GroqBrain with Web Capabilities)
+# AI BRAINS (Groq + Gemini Preserved)
 # ============================================================================
 
 class GroqBrain:
-    # 🔥 UPDATED SYSTEM PROMPT: MANDATORY VISUALS & ENHANCEMENT
-    SYSTEM_PROMPT = """You are Kirti OS, an Expert AI Developer.
-
-PROTOCOL:
-1. **BROWSER FIRST:** Use <TOOL:search_web...> for any coding task.
-2. **ENHANCE & ADAPT:** The web results might be incomplete. YOU MUST FIX THEM.
-   - If web code lacks images, INSERT THEM.
-   - If web code lacks a logo, CREATE AN SVG.
-   - Never say "I found this code". Just BUILD IT.
-
-MANDATORY VISUALS (Do not skip):
-- **Logo:** Always add an `<svg>...</svg>` logo in the navbar.
-- **Images:** Use `https://source.unsplash.com/random/800x600/?KEYWORD` (Replace KEYWORD with context like coffee, gym, tech).
-- **Icons:** Use `<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">` and add `<i>` tags.
-
-OUTPUT FORMAT:
-<TOOL:create_file>
-PATH: FolderName/index.html
-CONTENT:
-...code with SVG and Images...
-</TOOL>
-
-Example:
-User: "Coffee Shop"
-You: "Building Coffee Shop...
-<TOOL:create_file>
-PATH: CoffeeShop/index.html
-CONTENT:
-<nav>
-  <svg width="40" height="40">...</svg> </nav>
-<img src="https://source.unsplash.com/random/800x600/?coffee" />
-...
-</TOOL>"
-"""
+    # Keeps the old prompt for simple tasks
+    SYSTEM_PROMPT = """You are Kirti OS. Use tools for simple PC tasks.
+    Tools: open_app, shutdown, mute, search_web, create_file (for single files).
+    Format: <TOOL:name|arg=val>"""
+    
     def __init__(self):
         self.api_key = os.getenv("GROQ_API_KEY")
         self.client = AsyncGroq(api_key=self.api_key) if self.api_key else None
@@ -326,7 +305,7 @@ class GeminiBrain:
         return "❌ Vision Failed: All Models & Keys Exhausted."
 
 # ============================================================================
-# MAIN ROUTER (UPDATED)
+# MAIN ROUTER (UPDATED FOR SELF-HEALING)
 # ============================================================================
 
 class TaskRouter:
@@ -338,12 +317,12 @@ class TaskRouter:
         self.parser = IntentParser()
         self.sys = SystemCollector()
         
-        # 🔥 Initialize the new Agent Manager
-        self.agent_manager = AgentManager()
+        # 🔥 Initialize the Self-Healing Orchestrator
+        self.orchestrator = SelfHealingOrchestrator()
         
         # Stats
         self.stats = {'requests': 0, 'actions': 0}
-        logger.info("TaskRouter (God Mode + Multi-Agent) Initialized")
+        logger.info("TaskRouter (God Mode + Self-Healing) Initialized")
 
     async def route(self, prompt: str, image_bytes: bytes = None) -> RouterResponse:
         start = asyncio.get_event_loop().time()
@@ -357,11 +336,22 @@ class TaskRouter:
         tool_calls = []
         
         try:
-            # 🚀 TASK 1: PROJECT BUILD (Agent Manager)
+            # 🚀 TASK 1: PROJECT BUILD (Self-Healing Orchestrator)
             if task == TaskType.PROJECT_BUILD:
-                # Agent Manager handles everything internally and returns a final report
-                result = await self.agent_manager.execute_project(prompt)
-                model = "Multi-Agent-Swarm"
+                # 🔥 MODEL SELECTION LOGIC
+                model_choice = "perplexity" # Default
+                if "chatgpt" in prompt.lower(): model_choice = "chatgpt"
+                elif "gemini" in prompt.lower(): model_choice = "gemini"
+                elif "perplexity" in prompt.lower(): model_choice = "perplexity"
+
+                logger.info(f"🔀 Routing to Self-Healing Orchestrator (Model: {model_choice.upper()})...")
+                
+                # Execute via Pro Models - Orchestrator handles everything
+                # Note: create_project returns a String message now
+                project_msg = await self.orchestrator.create_project(prompt, service=model_choice)
+                
+                result = project_msg
+                model = f"God-Mode-{model_choice.capitalize()}"
             
             # 🚀 TASK 2: SYSTEM STATUS
             elif task == TaskType.SYSTEM_STATUS:

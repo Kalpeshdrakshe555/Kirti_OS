@@ -2,7 +2,7 @@
 """
 Kirti OS - Telegram Bot (God Mode Interface)
 Purpose: Connects Telegram to Router & Tool Registry.
-Fixed: Timeout settings moved to HTTPXRequest to prevent TypeError.
+Updated: Handles Long-Running Tasks (God Mode) with Status Updates.
 """
 import sys
 import os
@@ -15,13 +15,14 @@ from dotenv import load_dotenv
 # Telegram Imports
 from telegram import Update
 from telegram.constants import ParseMode, ChatAction
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, Defaults
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.request import HTTPXRequest 
 
 # Image/System Imports
 import mss
 import pyautogui
 from PIL import Image
+from io import BytesIO
 
 # PATH FIX
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -29,8 +30,14 @@ root_dir = os.path.abspath(os.path.join(current_dir, "../../"))
 sys.path.append(root_dir)
 
 # Import Core
-from Kirti_OS.core.router import TaskRouter
-from Kirti_OS.core.tools import ToolRegistry
+# Note: Ensure these imports work based on your folder structure
+try:
+    from Kirti_OS.core.router import TaskRouter
+    from Kirti_OS.core.tools import ToolRegistry
+except ImportError:
+    # Fallback if running from root
+    from core.router import TaskRouter
+    from core.tools import ToolRegistry
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -60,8 +67,26 @@ class KirtiOSBot:
             # Fallback to plain text if Markdown fails
             await update.message.reply_text(text, parse_mode=None)
 
+    async def _edit_safe(self, update: Update, message_id: int, text: str):
+        """Edits a message safely (handling Markdown errors)"""
+        try:
+            await update.get_bot().edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=message_id,
+                text=text,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except:
+            await update.get_bot().edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=message_id,
+                text=text,
+                parse_mode=None
+            )
+
     async def _check_auth(self, update):
         if update.effective_user.id != BotConfig.ALLOWED_USER_ID:
+            logger.warning(f"⚠️ Unauthorized access attempt from ID: {update.effective_user.id}")
             return False
         return True
 
@@ -71,8 +96,8 @@ class KirtiOSBot:
 🤖 **Kirti OS (God Mode) Is Ready!**
 
 **You can say:**
+• "Create a Snake Game in Python" (God Mode)
 • "Open Chrome"
-• "Mute volume"
 • "Shutdown the PC"
 • "What is on my screen?"
 • "Create a file named log.txt"
@@ -107,59 +132,82 @@ Use `/help` for more options.
         text = update.message.text or update.message.caption or "Analyze this"
         img_bytes = None
         
+        # 1. Send Initial "Thinking" Status
+        processing_msg = await update.message.reply_text("⚡ Thinking...")
+        
         try:
             await update.message.chat.send_action(ChatAction.TYPING)
             
-            # 1. Handle Photos (User sent an image)
+            # --- HANDLE MEDIA ---
             if update.message.photo:
                 f = await update.message.photo[-1].get_file()
                 img_bytes = bytes(await f.download_as_bytearray())
             
-            # 2. Handle Documents (Save to PC)
             elif update.message.document:
                 doc = update.message.document
                 f = await doc.get_file()
-                # Default save to Downloads folder
                 path = BotConfig.DOWNLOAD_DIR / doc.file_name
                 await f.download_to_drive(path)
-                await self._send_safe(update, f"✅ File Saved: `{path}`")
+                await self._edit_safe(update, processing_msg.message_id, f"✅ File Saved: `{path}`")
                 return
 
-            # 3. Auto-Screenshot Trigger
-            # If user asks "what is on screen" but didn't send an image, take one automatically
+            # --- AUTO SCREENSHOT ---
             if not img_bytes and any(k in text.lower() for k in ['screen', 'display', 'monitor']):
                 try:
                     with mss.mss() as sct:
                         s = sct.grab(sct.monitors[1])
-                        from io import BytesIO
                         bio = BytesIO()
                         Image.frombytes('RGB', s.size, s.rgb).save(bio, 'JPEG')
                         img_bytes = bio.getvalue()
                         await update.message.chat.send_action(ChatAction.UPLOAD_PHOTO)
+                        # We send a new photo message, so we can delete the "thinking" text
                         await update.message.reply_photo(img_bytes, caption="📸 Auto-View")
+                        await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=processing_msg.message_id)
+                        return # We stop here for simple screenshot requests
                 except Exception as e:
                     logger.error(f"Auto-screenshot failed: {e}")
 
-            # 4. Route to AI (The Brain)
+            # --- CHECK FOR GOD MODE (PROJECT BUILD) ---
+            # If user asks to create/build, update status immediately because it takes time
+            project_keywords = ['create', 'build', 'develop', 'make a project', 'make an app']
+            if any(k in text.lower() for k in project_keywords) and len(text) > 10:
+                await self._edit_safe(
+                    update, 
+                    processing_msg.message_id, 
+                    "🏗️ **God Mode Activated**\n\nInitializing Architect Agent...\nThis may take 2-5 minutes. Please wait. ☕"
+                )
+                # Keep typing action active periodically if possible, but for now we just wait
+
+            # --- ROUTE TO AI (THE BRAIN) ---
+            # This call might take 5 mins if it's a project build
             resp = await self.router.route(text, img_bytes)
             
-            # 5. Execute Tools (The God Mode Part)
+            # --- EXECUTE TOOLS ---
             action_log = ""
             if resp.tool_calls:
                 for tool in resp.tool_calls:
                     res = await ToolRegistry.execute(tool.tool_name, **tool.arguments)
                     action_log += f"\n⚙️ **Action:** {res}"
             
-            # 6. Reply to User
-            final_msg = resp.result + action_log + f"\n\n_🧠 {resp.model_used}_"
+            # --- FORMAT FINAL RESPONSE ---
+            final_msg = resp.result + action_log
             
+            # Add Model Footer
+            footer = f"\n\n_🧠 {resp.model_used}_"
+            if len(final_msg) + len(footer) < 4000:
+                final_msg += footer
+            
+            # --- REPLY TO USER (EDIT THE STATUS MESSAGE) ---
             if len(final_msg) > 4000:
-                await self._send_safe(update, final_msg[:4000])
+                # If too long, split or send as file? For now, truncate safely
+                await self._edit_safe(update, processing_msg.message_id, final_msg[:4000])
+                await update.message.reply_text(final_msg[4000:]) # Send rest as new msg
             else:
-                await self._send_safe(update, final_msg)
+                await self._edit_safe(update, processing_msg.message_id, final_msg)
 
         except Exception as e:
-            await self._send_safe(update, f"❌ System Error: {e}")
+            logger.error(f"Error handling message: {e}")
+            await self._edit_safe(update, processing_msg.message_id, f"❌ System Error: {e}")
 
 # ============================================================================
 # MAIN APPLICATION ENTRY POINT
@@ -171,9 +219,14 @@ def main():
     
     bot = KirtiOSBot()
     
-    # Configure Connection Settings (Timeout Fix)
-    # Increased timeouts for stable connection
-    request = HTTPXRequest(connection_pool_size=8, read_timeout=30.0, write_timeout=30.0, connect_timeout=30.0)
+    # Configure Connection Settings (Important for Long Tasks)
+    # read_timeout=300s (5 mins) ensures Telegram doesn't disconnect during Project Build
+    request = HTTPXRequest(
+        connection_pool_size=8, 
+        read_timeout=300.0, 
+        write_timeout=300.0, 
+        connect_timeout=60.0
+    )
     
     app = Application.builder().token(BotConfig.TELEGRAM_BOT_TOKEN).request(request).build()
     
@@ -184,8 +237,9 @@ def main():
     app.add_handler(MessageHandler(filters.ALL, bot.handle_all))
     
     print(f"🚀 Kirti OS Started! (ID: {BotConfig.ALLOWED_USER_ID})")
+    print("   Waiting for commands...")
     
-    # Start Polling (Allowed updates ensures we get everything)
+    # Start Polling
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
