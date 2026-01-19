@@ -325,7 +325,7 @@ if __name__ == "__main__":
         # 2. "Create a To-Do list using ChatGPT"
         # 3. "Create a Snake Game" (Defaults to Perplexity)
         
-        TEST_PROMPT = "Create a simple Digital Clock in Python using Tkinter using ChatGPT"
+        TEST_PROMPT = "create a website similar to zomato using html, css, js, python and sql lite database create a interactive gui and frontend"
         
         # --- 🧠 AUTO-DETECT MODEL LOGIC ---
         prompt_lower = TEST_PROMPT.lower()
